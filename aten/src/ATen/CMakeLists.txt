@@ -159,7 +159,7 @@ else()
   )
 endif()
 
-if (USE_LIGHTWEIGHT_DISPATCH)
+if(USE_LIGHTWEIGHT_DISPATCH)
   set(all_cpu_cpp ${all_cpu_cpp} ${generated_unboxing_sources})
 endif()
 if(AT_MKL_ENABLED)
