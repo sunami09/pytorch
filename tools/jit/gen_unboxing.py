@@ -2,11 +2,8 @@
 import argparse
 import json
 import os
-
+import pathlib
 from dataclasses import dataclass
-from typing import Union, Sequence
-from typing_extensions import Literal
-
 from tools.codegen.api import unboxing, cpp
 from tools.codegen.api.translate import translate
 from tools.codegen.api.types import CppSignatureGroup, CType, BaseCType, voidT
@@ -14,6 +11,8 @@ from tools.codegen.context import method_with_native_function
 from tools.codegen.gen import parse_native_yaml
 from tools.codegen.model import NativeFunction, NativeFunctionsGroup, Variant
 from tools.codegen.utils import Target, FileManager, mapMaybe, make_file_manager
+from typing import Union, Sequence
+from typing_extensions import Literal
 
 
 # Generates UnboxingFunctions.h & UnboxingFunctions.cpp.
@@ -81,6 +80,7 @@ TORCH_API void {f.func.name.unambiguous_name()}(Stack & stack) {{
     {push_str}
 }}
 """
+
 
 # Generates RegisterCodegenUnboxedKernels.cpp.
 @dataclass(frozen=True)
@@ -157,6 +157,10 @@ def main() -> None:
         "-d", "--install_dir", help="output directory", default="build/aten/src/ATen"
     )
     parser.add_argument(
+        '-o',
+        '--output-dependencies',
+        help='output a list of dependencies into the given file and exit')
+    parser.add_argument(
         '--dry-run', action='store_true',
         help='run without writing any files (still updates outputs)')
 
@@ -171,6 +175,14 @@ def main() -> None:
 
     cpu_fm = make_file_manager(options=options)
     gen_unboxing(native_functions=native_functions, cpu_fm=cpu_fm)
+
+    if options.output_dependencies:
+        depfile_path = pathlib.Path(options.output_dependencies).resolve()
+        depfile_name = depfile_path.name
+        depfile_stem = depfile_path.stem
+
+        path = depfile_path.parent / depfile_name
+        cpu_fm.write_outputs(depfile_stem, str(path))
 
 
 if __name__ == "__main__":
