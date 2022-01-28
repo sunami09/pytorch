@@ -16020,21 +16020,36 @@ class TestNNDeviceType(NNTestCase):
         sizes = [(1, 1, 32), (3, 16, 310), (12, 4, 1024), (4, 2, 1200)]
         for (B, num_heads, L) in sizes:
             input = torch.randn((B, num_heads, L, L))
+            dim = input.dim() - 1
             mask = torch.randint(0, 2, (B, L))
             if (self.device_type == "cuda"):
                 input = input.cuda()
                 mask = mask.cuda()
             mask = mask.reshape(B, 1, 1, L).expand(B, num_heads, L, L).bool()
-            native_res = torch._masked_softmax(input, mask)
+            native_res = torch._masked_softmax(input, dim, mask)
             mask = mask.float()
 
             def slow_masked_softmax(input, mask):
                 exp = torch.exp(input)
                 exp = exp * mask
-                s = exp.sum(dim=3, keepdim=True).expand(exp.size())
+                s = exp.sum(dim=dim, keepdim=True).expand(exp.size())
                 return exp / s
             pt_res = slow_masked_softmax(input, mask)
             self.assertEqual(pt_res, native_res, exact_dtype=True)
+
+    def test_masked_softmax_grad(self, device):
+        sizes = [(1, 1, 32), (3, 16, 310), (12, 4, 1024)]
+        for (B, num_heads, L) in sizes:
+            input = torch.randn((B, num_heads, L, L), requires_grad=True)
+            dim = input.dim() - 1
+            mask = torch.randint(0, 2, (B, L))
+            if (self.device_type == "cuda"):
+                input = input.cuda()
+                mask = mask.cuda()
+            if self.device_type == "meta":
+                return
+            mask = mask.reshape(B, 1, 1, L).expand(B, num_heads, L, L).bool()
+            gradcheck(torch._masked_softmax, (input, dim, mask))
 
     @onlyCUDA
     def test_masked_softmax_transformer_layout(self, device):
@@ -16042,19 +16057,20 @@ class TestNNDeviceType(NNTestCase):
         num_heads = 16
         L = 42
         input = torch.randn((B, num_heads, L, L))
+        dim = input.dim() - 1
         mask = torch.randint(0, 2, (B, L))
         if (self.device_type == "cuda"):
             input = input.cuda()
             mask = mask.cuda()
         mask = mask.bool()
-        native_res = torch._masked_softmax(input, mask)
+        native_res = torch._masked_softmax(input, dim, mask)
         mask = mask.reshape(B, 1, 1, L).expand(B, num_heads, L, L)
         mask = mask.float()
 
         def slow_masked_softmax(input, mask):
             exp = torch.exp(input)
             exp = exp * mask
-            s = exp.sum(dim=3, keepdim=True).expand(exp.size())
+            s = exp.sum(dim=dim, keepdim=True).expand(exp.size())
             return exp / s
         pt_res = slow_masked_softmax(input, mask)
         self.assertEqual(pt_res, native_res, exact_dtype=True)
