@@ -1,21 +1,21 @@
-# Generates CodegenUnboxingWrappers.cpp.
-# This generates static unboxing wrapper for ATen ops.
+# Generates RegisterCodegenUnboxedKernels.cpp, UnboxingFunctions.h and UnboxingFunctions.cpp.
 import argparse
 import json
 import os
 import pathlib
 from dataclasses import dataclass
-from tools.codegen.api import unboxing
-from tools.codegen.api.types import CppSignatureGroup
+from tools.codegen.api import unboxing, cpp
+from tools.codegen.api.translate import translate
+from tools.codegen.api.types import CppSignatureGroup, CType, BaseCType, voidT
 from tools.codegen.context import method_with_native_function
 from tools.codegen.gen import parse_native_yaml
-from tools.codegen.model import NativeFunction, NativeFunctionsGroup
+from tools.codegen.model import NativeFunction, NativeFunctionsGroup, Variant
 from tools.codegen.utils import Target, FileManager, mapMaybe, make_file_manager
 from typing import Union, Sequence
 from typing_extensions import Literal
 
 
-# Generates CodegenFunctions.h & CodegenFunctions.cpp.
+# Generates UnboxingFunctions.h & UnboxingFunctions.cpp.
 @dataclass(frozen=True)
 class ComputeUnboxingFunctions:
     target: Union[Literal[Target.DECLARATION], Literal[Target.DEFINITION]]
@@ -23,7 +23,7 @@ class ComputeUnboxingFunctions:
     @method_with_native_function
     def __call__(self, f: NativeFunction) -> str:
         sig_group = CppSignatureGroup.from_native_function(
-            f, method=False, fallback_binding=f.manual_cpp_binding
+            f, method=(Variant.method in f.variants), fallback_binding=f.manual_cpp_binding
         )
         sig = sig_group.most_faithful_signature()
 
@@ -50,39 +50,46 @@ TORCH_API void {f.func.name.unambiguous_name()}(Stack & stack);
             )
 
             # parse arguments into C++ code
-            arguments = unboxing.convert_arguments(
-                args, f.func.arguments.tensor_options
-            )
+            expr_list, code_list = unboxing.convert_arguments(args)
 
             # for each C++ argument, generate the conversion code
             code_connector = "\n\t"
-            code_list = []
-            for arg in arguments:
-                code_list.extend(arguments[arg].code)
-            code = code_connector.join(code_list)
-
+            arg_connector = ",\n\t\t"
             # function call and push back to stack
-            func_call_and_push = code_connector.join(
-                unboxing.generate_unboxed_kernel_call(f, sig, arguments)
-            )
-
+            prefix = "self_base." if sig.method else "at::"
+            args_str = "" if not expr_list else f"""
+        {arg_connector.join(e.expr for e in translate(expr_list, sig.arguments(), method=sig.method))}
+    """
+            ret_type: CType = cpp.returns_type(f.func.returns)
+            if isinstance(ret_type, BaseCType) and ret_type.type == voidT:
+                ret_str = ""
+                push_str = ""
+            else:
+                ret_str = "auto result_ = "
+                push_str = """
+    pack(stack, std::move(result_));
+                """
             return f"""
 // aten::{f.func}
 TORCH_API void {f.func.name.unambiguous_name()}(Stack & stack) {{
-    {code}
+    {code_connector.join(code_list)}
+
     drop(stack, {len(args)});
-    {func_call_and_push}
+
+    {ret_str}{prefix}{sig.name()}({args_str});
+    {push_str}
 }}
 """
 
 
+# Generates RegisterCodegenUnboxedKernels.cpp.
 @dataclass(frozen=True)
-class ComputeUnboxingWrapper:
+class ComputeCodegenUnboxedKernels:
     @method_with_native_function
     def __call__(self, f: NativeFunction) -> str:
         # We unconditionally generate function wrappers,
         sig_group = CppSignatureGroup.from_native_function(
-            f, method=False, fallback_binding=f.manual_cpp_binding
+            f, method=(Variant.method in f.variants), fallback_binding=f.manual_cpp_binding
         )
 
         sig = sig_group.signature
@@ -111,7 +118,7 @@ def gen_unboxing(
         return fn.root_name
 
     cpu_fm.write_sharded(
-        "CodegenFunctions.cpp",
+        "UnboxingFunctions.cpp",
         native_functions,
         key_fn=key_func,
         env_callable=lambda fn: {
@@ -121,7 +128,7 @@ def gen_unboxing(
         sharded_keys={"definitions"},
     )
     cpu_fm.write(
-        "CodegenFunctions.h",
+        "UnboxingFunctions.h",
         lambda: {
             "declarations": list(
                 mapMaybe(ComputeUnboxingFunctions(Target.DECLARATION), native_functions)
@@ -129,10 +136,10 @@ def gen_unboxing(
         },
     )
     cpu_fm.write_sharded(
-        "CodegenUnboxingWrappers.cpp",
+        "RegisterCodegenUnboxedKernels.cpp",
         native_functions,
         key_fn=key_func,
-        env_callable=lambda fn: {"unboxed_ops": [ComputeUnboxingWrapper()(fn)]},
+        env_callable=lambda fn: {"unboxed_ops": [ComputeCodegenUnboxedKernels()(fn)]},
         num_shards=5,
         sharded_keys={"unboxed_ops"},
     )
