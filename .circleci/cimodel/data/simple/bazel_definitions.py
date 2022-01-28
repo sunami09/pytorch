@@ -32,7 +32,7 @@ class BazelJob:
             "pytorch",
             "linux",
             "xenial",
-            "py3.6",
+            "py3.7",
             "gcc7",
             "bazel",
             self.phase,
