@@ -222,8 +222,8 @@ def reshard_local_shard(
             st_size[current_sharding_dim], split_size, idx
         )
         output_tensor_size = list(st_size)
-        output_tensor_size[current_sharding_dim] = sharded_dim_size
         output_tensor_size[reshard_dim] = input_split_sizes[current_rank]
+        output_tensor_size[current_sharding_dim] = sharded_dim_size
         output_tensor_list[
             placement.rank()
         ] = torch.empty(  # type: ignore[union-attr, index]
