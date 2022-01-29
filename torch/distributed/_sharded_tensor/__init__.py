@@ -15,6 +15,7 @@ from typing import List
 
 from .api import (
     _register_sharded_op,
+    _PartialTensor,
     CreateOp,
     Shard,
     ShardMetadata,
@@ -369,25 +370,17 @@ def pre_load_state_dict_hook(module, state_dict, prefix, local_metadata, strict,
                 if isinstance(state_dict[key], ShardedTensor):
                     setattr(submodule, attr_name, state_dict[key])
 
-def shard_parameter(
-        module: torch.nn.Module,
-        param_name: str,
-        sharding_spec: ShardingSpec,
-        src_rank=0,
-        process_group=None):
+def _shard_tensor(
+    tensor: torch.Tensor, sharding_spec: ShardingSpec, src_rank=0, process_group=None
+):
     """
-    Given a :class:`torch.nn.Module`, a ``param_name`` for a parameter in that
-    module, it shards that parameter according to the provided
+    Given a :class:`torch.Tensor`, it shards that tensor according to the provided
     ``sharding_spec``. ``src_rank`` denotes the source rank which would be
     used as the ground truth of the data which would be scattered as shards
     across the rest of the ranks.
 
-    This method replaces ``module.param_name`` with a
-    :class:`torch.distributed._sharded_tensor.ShardedTensor`
-
     Args:
-        module (:class:`torch.nn.Module`): Module whose parameter needs to be sharded.
-        param_name (str): Name of the parameter of ``module`` that needs to be sharded.
+        tensor (:class:`torch.Tensor`): Tensor needs to be sharded.
         sharding_spec (:class:`torch.distributed._sharding_spec.ShardingSpec`): The specification
             describing how to shard the Tensor.
 
@@ -399,23 +392,17 @@ def shard_parameter(
         process_group (ProcessGroup, optional): The process group to work on. If None,
             the default process group will be used.
 
+    Returns:
+        A :class:`ShardedTensor` sharded from the given tensor.
+
     .. warning::
-        Only :class:`torch.distributed._sharding_spec.ShardingSpec` is
+        Only :class:`torch.distributed._sharding_spec.ChunkShardingSpec` is
         currently supported as the ``sharding_spec``.
     """
-    # Perform some validation first.
     if not isinstance(sharding_spec, ChunkShardingSpec):
-        raise ValueError('Only ChunkShardingspec is supported.')
-
-    if not hasattr(module, param_name):
-        raise ValueError(f'module: {module} does not have parameter with name: {param_name}')
-
-    tensor = getattr(module, param_name)
-    if not isinstance(tensor, torch.Tensor):
-        raise ValueError(f'Expected {type(module).__name__}.{param_name} to be a Tensor, but found {type(tensor).__name__}')
-
+        raise NotImplementedError('Only ChunkShardingspec is supported.')
     if not tensor.is_contiguous():
-        raise ValueError(f'param: {param_name} is not a contiguous Tensor')
+        raise ValueError('input tensor is not a contiguous Tensor')
 
     pg = process_group if process_group is not None else distributed_c10d._get_default_group()
     world_size = dist.get_world_size(pg)
@@ -487,6 +474,55 @@ def shard_parameter(
     # Manually set sharding_spec
     st._sharding_spec = sharding_spec
 
+    return st
+
+def shard_parameter(
+        module: torch.nn.Module,
+        param_name: str,
+        sharding_spec: ShardingSpec,
+        src_rank=0,
+        process_group=None):
+    """
+    Given a :class:`torch.nn.Module`, a ``param_name`` for a parameter in that
+    module, it shards that parameter according to the provided
+    ``sharding_spec``. ``src_rank`` denotes the source rank which would be
+    used as the ground truth of the data which would be scattered as shards
+    across the rest of the ranks.
+
+    This method replaces ``module.param_name`` with a
+    :class:`torch.distributed._sharded_tensor.ShardedTensor`
+
+    Args:
+        module (:class:`torch.nn.Module`): Module whose parameter needs to be sharded.
+        param_name (str): Name of the parameter of ``module`` that needs to be sharded.
+        sharding_spec (:class:`torch.distributed._sharding_spec.ShardingSpec`): The specification
+            describing how to shard the Tensor.
+
+    Keyword args:
+        src_rank (int, optional): The source rank which is used as the ground truth of
+            the data for the parameter that would be sharded and scattered
+            across the rest of the ranks.
+            Default: 0.
+        process_group (ProcessGroup, optional): The process group to work on. If None,
+            the default process group will be used.
+
+    .. warning::
+        Only :class:`torch.distributed._sharding_spec.ChunkShardingSpec` is
+        currently supported as the ``sharding_spec``.
+    """
+    # Perform some validation first.
+    if not hasattr(module, param_name):
+        raise ValueError(f'module: {module} does not have parameter with name: {param_name}')
+
+    tensor = getattr(module, param_name)
+    if not isinstance(tensor, torch.Tensor):
+        raise ValueError(f'Expected {type(module).__name__}.{param_name} to be a Tensor, but found {type(tensor).__name__}')
+
+    if not tensor.is_contiguous():
+        raise ValueError(f'param: {param_name} is not a contiguous Tensor')
+
+    st = _shard_tensor(tensor, sharding_spec, src_rank, process_group)
+
     # Replace param with ShardedTensor.
 
     # Need to delete the attribute first since param_name might be
@@ -538,3 +574,44 @@ def sharded_op_impl(func):
 
 # Import all builtin sharded ops
 from .ops import *  # noqa: F403
+
+def _reshard_output(
+        module: torch.nn.Module,
+        resharding_spec: ShardingSpec) -> torch.nn.Module:
+    """
+    Hook a module with local shards collection in the forward pass according
+    to the given ``resharding_spec``.
+
+    Args:
+        module (:class:`torch.nn.Module`): Module whose output needs to be resharded.
+        resharding_spec (:class:`torch.distributed._sharding_spec.ShardingSpec`): The
+            specification describing how the output of the module will be resharded.
+
+    Returns:
+        A :class:`torch.nn.Module` object with collection API hooked.
+    """
+    def hook_func(_module, _input, output):
+        if isinstance(output, ShardedTensor) or isinstance(output, _PartialTensor):
+            return output.reshard(resharding_spec)
+        return output
+    module.register_forward_hook(hook_func)
+    return module
+
+
+def _collect_local_shard(module: torch.nn.Module) -> torch.nn.Module:
+    """
+    Hook a module with local shards collection in the forward pass.
+
+    Args:
+        module (:class:`torch.nn.Module`): Module whose output needs to be resharded.
+
+    Returns:
+        A :class:`torch.nn.Module` object with collection API hooked.
+    """
+
+    def hook_func(_module, _input, output):
+        if isinstance(output, ShardedTensor):
+            return output.local_tensor()
+        return output
+    module.register_forward_hook(hook_func)
+    return module
