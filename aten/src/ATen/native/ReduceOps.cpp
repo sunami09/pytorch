@@ -266,6 +266,28 @@ TORCH_META_FUNC(aminmax)
   this->set_output(1, shape, options);
 }
 
+TORCH_META_FUNC(amax)
+(const Tensor& self, IntArrayRef dims, bool keepdim) {
+  if (self.numel() == 0) {
+    native::zero_numel_check_dims(self, dims, "amax()");
+  }
+
+  DimVector dims_(dims);
+  maybe_wrap_dims(dims_, self.dim());
+
+  const auto& result = this->maybe_get_output();
+  ScalarType out_dtype;
+
+  if (result.defined()) {
+    out_dtype = result.scalar_type();
+  } else {
+    out_dtype = self.scalar_type();
+  }
+
+  // This is what triggers the error
+  this->set_output(0, dims, {}, self.options().dtype(out_dtype), {});
+}
+
 } // namespace meta
 
 namespace native {
@@ -1434,23 +1456,16 @@ Tensor amin(const Tensor& self, IntArrayRef dim, bool keepdim) {
   return at::amin_out(result, self, dim, keepdim);
 }
 
-Tensor &amax_out(const Tensor& self, IntArrayRef dim, bool keepdim, Tensor& result) {
+TORCH_IMPL_FUNC(amax_out) (const Tensor& self, IntArrayRef dim, bool keepdim, const Tensor& result) {
   TORCH_CHECK(self.scalar_type() == result.scalar_type(), "Expected the dtype for input and out to match, but got ",
-              self.scalar_type(), " for input's dtype and ",  result.scalar_type(), " for out's dtype.");
-  if (self.numel() == 0) {
-    zero_numel_check_dims(self, dim, "amax()");
-  }
+            self.scalar_type(), " for input's dtype and ",  result.scalar_type(), " for out's dtype.");
+  c10::MaybeOwned<Tensor> in = c10::MaybeOwned<Tensor>::borrowed(self);
+  auto iter =
+      meta::make_reduction(*in, result, dim, keepdim, self.scalar_type());
 
-  auto iter = make_reduction("amax", result, self, dim, keepdim, self.scalar_type());
   if (iter.numel() != 0) {
     max_values_stub(iter.device_type(), iter);
   }
-  return result;
-}
-
-Tensor amax(const Tensor& self, IntArrayRef dim, bool keepdim) {
-  Tensor result = at::empty({0}, self.options());
-  return at::amax_out(result, self, dim, keepdim);
 }
 
 template <class Stub>
