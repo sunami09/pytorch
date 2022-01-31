@@ -2025,7 +2025,14 @@ Tensor _unsafe_view(const Tensor& self, IntArrayRef size) {
   return self.view(size);
 }
 
-static Tensor unsqueeze_sparse(Tensor const &self, int64_t dim /* should already be wrapped */) {
+Tensor unsqueeze(const Tensor& self, int64_t dim) {
+  dim = maybe_wrap_dim(dim, self.dim() + 1);
+  auto g = inferUnsqueezeGeometry(self, dim);
+  return self.as_strided(g.sizes, g.strides);
+}
+
+Tensor unsqueeze_sparse(Tensor const &self, int64_t dim) {
+  dim = maybe_wrap_dim(dim, self.dim() + 1);
   int64_t sparse_dim = self.sparse_dim();
   int64_t dense_dim = self.dense_dim();
   auto indices = self._indices();
@@ -2049,7 +2056,7 @@ static Tensor unsqueeze_sparse(Tensor const &self, int64_t dim /* should already
   }
 }
 
-Tensor unsqueeze_qtensor(const Tensor& self, int64_t dim) {
+Tensor unsqueeze_quantized(const Tensor& self, int64_t dim) {
   dim = maybe_wrap_dim(dim, self.dim() + 1);
   auto g = inferUnsqueezeGeometry(self, dim);
   auto quantizer = get_qtensorimpl(self)->quantizer();
@@ -2065,19 +2072,6 @@ Tensor unsqueeze_qtensor(const Tensor& self, int64_t dim) {
                                                   quantizer->scalar_type());
   }
   return make_qtensor(self, g.sizes, g.strides, quantizer);
-}
-
-Tensor unsqueeze(const Tensor& self, int64_t dim) {
-  dim = maybe_wrap_dim(dim, self.dim() + 1);
-
-  if (self.is_sparse()) {
-    return unsqueeze_sparse(self, dim);
-  } else if (self.is_quantized()) {
-    return unsqueeze_qtensor(self, dim);
-  } else {
-    auto g = inferUnsqueezeGeometry(self, dim);
-    return self.as_strided(g.sizes, g.strides);
-  }
 }
 
 Tensor & unsqueeze_(Tensor& self, int64_t dim) {
