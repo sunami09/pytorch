@@ -36,8 +36,16 @@ if TYPE_CHECKING:
 
 @dataclass
 class CPUOffload:
+    """
+    CPU offlaoding config. Currently, only parameter and gradient CPU
+    offload are supported.
+    offload_params: Offloading parameters to CPUs when these parameters are
+                    not used for computation on GPUs. This implicitly enables
+                    gradient offloading to CPUs in order for parameters and
+                    gradients to be on the same device to work with optimizer.
+    """
     offload_params: bool = False
-    # TODO: state dict offloading, activation offloading
+    # TODO: state dict offloading
     # https://github.com/pytorch/pytorch/issues/67224
 
 class BackwardPrefetch_(Enum):
@@ -61,7 +69,7 @@ class BackwardPrefetch_(Enum):
                    approach may prefetch full parameters for layers ahead of next layer,
                    this 'ahead' all_gather could delay next layer's all_gather in the
                    single NCCL stream and cause the next layer's computation delay. So it may
-                   cause some performance regession for some models.
+                   cause some performance regession for some models.77
     """
     BACKWARD_PRE = auto()
     BACKWARD_POST = auto()
@@ -87,13 +95,13 @@ class TrainingState_(Enum):
 class FullyShardedDataParallel(nn.Module):
     """
     A wrapper for sharding Module parameters across data parallel workers. This
-    is inspired by `Xu et al.`_ as well as the ZeRO Stage 3 from DeepSpeed_.
+    is inspired by `Xu et al.`_ as well as the ZeRO Stage 3 from DeepSpeed.
     ``FullyShardedDataParallel`` is commonly shorten to FSDP.
     .. _`Xu et al.`: https://arxiv.org/abs/2004.13336
     .. _DeepSpeed: https://www.deepspeed.ai/
     Example::
         import torch
-        from torch.distributed._fsdp import FullyShardedDataParallel as FSDP
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
         torch.cuda.set_device(device_id)
         sharded_module = FSDP(my_module)
         optim = torch.optim.Adam(sharded_module.parameters(), lr=0.0001)
