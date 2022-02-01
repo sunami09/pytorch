@@ -9,12 +9,12 @@ import unittest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributed._fsdp.fully_sharded_data_parallel import (
+from torch.distributed.fsdp.fully_sharded_data_parallel import (
     FullyShardedDataParallel as FSDP,
     CPUOffload,
     BackwardPrefetch_,
 )
-from torch.distributed._fsdp.wrap import (
+from torch.distributed.fsdp.wrap import (
     default_auto_wrap_policy,
     enable_wrap,
     wrap,
@@ -206,7 +206,7 @@ class TestFSDPWrap(FSDPTest):
         for i, module in enumerate(modules_in_fsdp_graph_order):
             self.assertEqual(i, module._my_fsdp_idx_in_graph)
             self.assertTrue(
-                module._fsdp_graph_order == modules_in_fsdp_graph_order
+                module.fsdp_graph_order == modules_in_fsdp_graph_order
             )
 
 
